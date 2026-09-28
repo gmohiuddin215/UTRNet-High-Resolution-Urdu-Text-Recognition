@@ -30,8 +30,18 @@ Changes to the original scripts:
   character in a label crashed training with a `KeyError`. It now reports how many labels were
   dropped for being too long or containing unknown characters.
 * `train.py` also has `--repeat_data` (oversample a data folder), `--freeze_FE` (train only the
-  BiLSTMs and output layer), and a clear error when a checkpoint's class count does not match
-  `--charset`.
+  BiLSTMs and output layer), `--freeze_bn` and `--accum_steps` (for small batches), a clear
+  error when a checkpoint's class count does not match `--charset`, and `--batch_max_length`
+  defaults to 250.
+* Training runs on current PyTorch / NumPy (e.g. Colab). Before, it crashed in three places:
+  an in-place addition in `modules/cnn/hrnet.py` broke `backward()` (fixed with bit-identical
+  outputs, so the released weights behave exactly as before), `torch._utils._accumulate` no
+  longer exists, and `imgaug` does not import under NumPy 2 (its three noise ops are replaced;
+  `timm` is called with keyword arguments that work on old and new versions).
+* Augmentation: the random rotation of up to 5 degrees pushed the ends of full-width lines out
+  of the image (the label then no longer matched); it is now limited by the line's aspect ratio
+  and fills with the background. Salt-and-pepper, border crop and resize are now drawn per image
+  instead of once per dataset.
 
 ---
 
@@ -46,8 +56,9 @@ Changes to the original scripts:
 3. **Training data was Urdu Nastaliq.** The bold, fully vowelled Naskh of the matn and the
    small honorific clusters were never shown to it.
 4. **Arabic labels are long.** A vowelled matn line is often 130-200 characters. `train.py`
-   and `test.py` silently drop labels longer than `--batch_max_length`, which defaults to 100.
-   **Always pass `--batch_max_length 250`**, otherwise most Arabic lines never reach training.
+   and `test.py` silently dropped labels longer than `--batch_max_length`, which defaulted to
+   100: on test data that was 35% of all lines. The default is now 250 and the number of dropped
+   labels is printed when the data loads.
 
 ### Label conventions
 
@@ -66,7 +77,7 @@ Changes to the original scripts:
 
 ```bash
 python3 -m venv utrnet && source utrnet/bin/activate
-pip install torch torchvision pillow numpy opencv-python lmdb natsort nltk fire fonttools pytz six
+pip install torch torchvision timm pillow numpy opencv-python lmdb natsort nltk fire fonttools pytz six matplotlib tqdm
 python -c "from PIL import features; print('raqm:', features.check('raqm'))"   # must be True
 ```
 If RAQM is `False`, Arabic and Nastaliq render as unjoined letters. On macOS:
@@ -168,24 +179,40 @@ python create_lmdb_dataset.py --inputPath real_val    --gtFile real_val/gt.txt  
 
 ## 8. Train (GPU: Colab T4 or a rented card, not a laptop)
 
+**Memory decides the batch size.** HRNet keeps full resolution, so a 64x800 line costs far more
+than the original 32x400. Measured training memory per image (float32):
+
+| setting | per image | 16 GB GPU (T4) | 24 GB (L4, A10) | 40 GB (A100) |
+|---|---|---|---|---|
+| 64x800, whole network | ~3.7 GB | batch 3 | batch 5 | batch 9 |
+| 64x800, `--freeze_FE` | ~0.9 GB | batch 12 | batch 20 | batch 32 |
+| 32x400, whole network (original) | ~1.0 GB | batch 12 | batch 20 | batch 32 |
+
+With small batches, add `--freeze_bn` (keeps the pretrained BatchNorm statistics, which a batch
+of 3 would only make noisy) and `--accum_steps` (sums gradients over several batches, so
+batch 3 x 4 steps behaves like a batch of 12 for the optimizer).
+
 ```bash
 COMMON="--FeatureExtraction HRNet --SequenceModeling DBiLSTM --Prediction CTC \
         --charset UrduGlyphs_extended.txt --imgH 64 --imgW 800 --batch_max_length 250"
 
-# stage 1: learn the new shapes, mostly from synthetic data
+# stage 1 (warm-up): CNN frozen, the BiLSTMs and the 29 new output rows learn first
 python train.py $COMMON --train_data lmdb/train --valid_data lmdb/val \
-  --saved_model UTRNet-Large-extended.pth --FT --adam --lr 1e-4 \
-  --repeat_data real:3 --batch_size 16 --num_epochs 8 --exp_name stage1
+  --saved_model UTRNet-Large-extended.pth --FT --freeze_FE --adam --lr 3e-4 \
+  --repeat_data real:3 --batch_size 12 --num_epochs 3 --exp_name stage1
 
-# stage 2: adapt to your books; real lines weighted up, smaller learning rate
+# stage 2: whole network, small batches, real lines weighted up
 python train.py $COMMON --train_data lmdb/train --valid_data lmdb/val \
-  --saved_model saved_models/stage1/best_norm_ED.pth --FT --adam --lr 3e-5 \
-  --repeat_data real:10 --batch_size 16 --num_epochs 15 --exp_name stage2
+  --saved_model saved_models/stage1/best_norm_ED.pth --FT --adam --lr 5e-5 \
+  --freeze_bn --batch_size 3 --accum_steps 4 \
+  --repeat_data real:10 --num_epochs 10 --exp_name stage2
 ```
-The learning rates are starting points, not tuned values. If stage 1 loss is unstable, add
-`--freeze_FE` for the first run. `--repeat_data real:10` counts every real line ten times per
-epoch. The model is saved when validation improves: `saved_models/<exp>/best_norm_ED.pth`.
-Out of GPU memory: lower `--batch_size` first.
+Batch sizes are for a 16 GB GPU; scale them with the table. Learning rates and epochs are
+starting points, not tuned values: watch the validation numbers in
+`saved_models/<exp>/log_train.txt` and stop when they stop improving. `--repeat_data real:10`
+counts every real line ten times per epoch (training set only). The best model is saved as
+`saved_models/<exp>/best_norm_ED.pth`. Out of memory: lower `--batch_size` and raise
+`--accum_steps` by the same factor.
 
 ## 9. Measure where it still fails
 

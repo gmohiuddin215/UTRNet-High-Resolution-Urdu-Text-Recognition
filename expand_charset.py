@@ -66,7 +66,7 @@ def main():
 
     w[0], b[0] = w_old[0], b_old[0]              # CTC blank keeps index 0
     idx_old = {c: i + 1 for i, c in enumerate(old)}
-    copied = 0
+    copied = 1                                   # the blank row
     for i, c in enumerate(new):
         if c in idx_old:
             w[i + 1], b[i + 1] = w_old[idx_old[c]], b_old[idx_old[c]]

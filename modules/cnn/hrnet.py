@@ -154,14 +154,19 @@ class HRBlock(nn.Module):
                     up_x = 0
                     for t, m in zip(res_list, self.up_conv_lists[i]):
                         up_x += m(t)
-                    x += up_x
+                    x = x + up_x
                 # Downsampling all streams (except the lowest) to all possible dimensions below it till the lowest stream dimension
                 if i != 0:
                     res_list = parallel_res_list[:i]
                     down_x = 0
                     for t, m in zip(res_list, self.down_conv_lists[i - 1]):
                         down_x += m(t)
-                    x += down_x
+                    x = x + down_x
+                # The original code added in place (x += ...), which modified parallel_res_list[i]: later
+                # streams then read the summed value. Writing it back keeps that exact computation (the
+                # released weights depend on it) without the in-place change to a ReLU output that
+                # makes backward() fail in current PyTorch.
+                parallel_res_list[i] = x
             x = self.relu(x)
             final_res_list.append(x)
         return final_res_list

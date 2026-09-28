@@ -9,7 +9,6 @@ Copyright (c) 2023-present: This work is licensed under the Creative Commons Att
 
 from functools import partial
 import random as rnd
-import imgaug.augmenters as iaa
 import numpy as np
 from PIL import ImageFilter, Image
 from timm.data import auto_augment
@@ -35,23 +34,38 @@ def gaussian_blur(img, radius, **__):
     op = _get_op(key, lambda: ImageFilter.GaussianBlur(radius))
     return img.filter(op)
 
+# The three noise/blur ops below replace imgaug (MotionBlur, AdditiveGaussianNoise,
+# AdditivePoissonNoise), which does not import under NumPy 2.
+
 def motion_blur(img, k, **__):
     k = _get_param(k, img, 0.08, 3) | 1  # bin to odd values
-    key = 'motion_blur_' + str(k)
-    op = _get_op(key, lambda: iaa.MotionBlur(k))
-    return Image.fromarray(op(image=np.asarray(img)))
+    angle = rnd.uniform(0, 180)
+    key = f'motion_blur_{k}_{int(angle)}'
+    def make_kernel():
+        kernel = Image.new('L', (k, k), 0)
+        from PIL import ImageDraw
+        c = (k - 1) / 2
+        dx, dy = c * np.cos(np.radians(angle)), c * np.sin(np.radians(angle))
+        ImageDraw.Draw(kernel).line([(c - dx, c - dy), (c + dx, c + dy)], fill=255)
+        weights = np.asarray(kernel, dtype=np.float64).ravel()
+        return ImageFilter.Kernel((k, k), weights.tolist(), scale=weights.sum() or 1) if k <= 5 else None
+    op = _get_op(key, make_kernel)
+    if op is None:  # PIL kernels are limited to 5x5: approximate larger blurs with a box blur
+        return img.filter(ImageFilter.BoxBlur(k // 4 or 1))
+    return img.filter(op)
 
 def gaussian_noise(img, scale, **_):
     scale = _get_param(scale, img, 0.25) | 1  # bin to odd values
-    key = 'gaussian_noise_' + str(scale)
-    op = _get_op(key, lambda: iaa.AdditiveGaussianNoise(scale=scale))
-    return Image.fromarray(op(image=np.asarray(img)))
+    arr = np.asarray(img).astype(np.float32)
+    arr += np.random.normal(0, scale, arr.shape)
+    return Image.fromarray(arr.clip(0, 255).astype(np.uint8))
 
 def poisson_noise(img, lam, **_):
     lam = _get_param(lam, img, 0.2) | 1  # bin to odd values
-    key = 'poisson_noise_' + str(lam)
-    op = _get_op(key, lambda: iaa.AdditivePoissonNoise(lam))
-    return Image.fromarray(op(image=np.asarray(img)))
+    arr = np.asarray(img).astype(np.float32)
+    # imgaug's AdditivePoissonNoise adds Poisson(lam) samples with a random sign per pixel
+    arr += np.random.poisson(lam, arr.shape) * np.random.choice([-1.0, 1.0], arr.shape)
+    return Image.fromarray(arr.clip(0, 255).astype(np.uint8))
 
 def salt_and_pepper_noise(image, prob=0.05):
     if prob <= 0:
@@ -62,7 +76,7 @@ def salt_and_pepper_noise(image, prob=0.05):
     min_intensity = 0
     max_intensity = intensity_levels - 1
     random_image_arr = np.random.choice([min_intensity, 1, np.nan], p=[prob / 2, 1 - prob, prob / 2], size=arr.shape)
-    salt_and_peppered_arr = arr.astype(np.float) * random_image_arr
+    salt_and_peppered_arr = arr.astype(np.float64) * random_image_arr
     salt_and_peppered_arr = np.nan_to_num(salt_and_peppered_arr, nan=max_intensity).astype(original_dtype)
     return Image.fromarray(salt_and_peppered_arr)
 
@@ -74,6 +88,18 @@ def random_border_crop(image):
     crop_bottom = int(img_height * rnd.uniform(0.925, 1.0))
     final_image = image.crop((crop_left, crop_top, crop_right, crop_bottom))
     return final_image
+
+def random_rotation(image, max_deg=5, max_shift=0.25):
+    """Small rotation that keeps the whole line in frame. The angle is capped so the ends of the
+    line move by at most max_shift x its height: for a full printed line (20x wider than tall)
+    that is under 1 degree, while a fixed 5 degrees would push the ends out of the image."""
+    w, h = image.size
+    limit = min(max_deg, np.degrees(np.arctan(max_shift * h / max(w, 1))))
+    arr = np.asarray(image)
+    border = np.concatenate([arr[0], arr[-1], arr[:, 0], arr[:, -1]])
+    fill = np.median(border, axis=0)
+    fill = tuple(int(v) for v in fill) if arr.ndim == 3 else int(fill)   # background, even if inverted
+    return image.rotate(rnd.uniform(-limit, limit), resample=Image.BICUBIC, expand=True, fillcolor=fill)
 
 def random_resize(image):
     size = image.size
@@ -128,7 +154,9 @@ def rand_augment_transform(magnitude=5, num_layers=3):
         'shear_x_pct': 0.9,
         'shear_y_pct': 0.0,
     }
-    ra_ops = auto_augment.rand_augment_ops(magnitude, hparams, transforms=_RAND_TRANSFORMS)
+    # keywords, not positions: timm >= 0.9 added a `prob` parameter before `hparams`
+    ra_ops = [auto_augment.AugmentOp(name, prob=0.5, magnitude=magnitude, hparams=hparams)
+              for name in _RAND_TRANSFORMS]
     # Supply weights to disable replacement in random selection (i.e. avoid applying the same op twice)
     choice_weights = [1. / len(ra_ops) for _ in range(len(ra_ops))]
     return auto_augment.RandAugment(ra_ops, num_layers, choice_weights)

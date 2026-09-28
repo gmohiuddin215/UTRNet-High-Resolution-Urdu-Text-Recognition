@@ -182,7 +182,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size')
     parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
     """ Data processing """
-    parser.add_argument('--batch_max_length', type=int, default=100, help='maximum-label-length')
+    parser.add_argument('--batch_max_length', type=int, default=250, help='maximum-label-length (vowelled Arabic lines are often 130-200 characters)')
     parser.add_argument('--charset', default='UrduGlyphs.txt', help='glyph list, one character per line (use UrduGlyphs_extended.txt for Arabic/Islamic text)')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=400, help='the width of the input image')

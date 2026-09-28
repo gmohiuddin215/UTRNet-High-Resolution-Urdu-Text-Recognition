@@ -26,6 +26,18 @@ from utils import Averager, Logger
 from dataset import hierarchical_dataset, AlignCollate
 from utils import CTCLabelConverter, AttnLabelConverter
 
+def set_train_mode(model, opt):
+    """model.train(), except for the parts fine-tuning keeps fixed."""
+    model.train()
+    if opt.freeze_FE:
+        model.FeatureExtraction.eval()
+    if opt.freeze_bn:
+        # small batches (e.g. 64x800 on a 16 GB GPU) give noisy BatchNorm statistics: keep the pretrained ones
+        for m in model.modules():
+            if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+                m.eval()
+
+
 def train(opt, device):
     # opt.num_gpu = 8 # Multi-GPU Training -> Uncomment line 24 & line 63-64
     logger = Logger(f'./saved_models/{opt.exp_name}/log_train.txt')
@@ -104,8 +116,8 @@ def train(opt, device):
         # train only the BiLSTMs and the output layer; BatchNorm statistics stay as pretrained
         for p in model.FeatureExtraction.parameters():
             p.requires_grad = False
-        model.FeatureExtraction.eval()
         logger.log('Feature extractor frozen (--freeze_FE)')
+    set_train_mode(model, opt)
     logger.log("Model:")
     logger.log(model)
 
@@ -167,6 +179,7 @@ def train(opt, device):
     for epoch in tqdm(range(opt.num_epochs)):
         logger.log("="*20,"Epoch =",epoch+1,"="*20)
         
+        model.zero_grad()
         for i, (image_tensors, labels) in enumerate(tqdm(train_loader)):
             #image_tensors, labels = train_dataset_batch.get_batch()
             image = image_tensors.to(device)
@@ -197,10 +210,12 @@ def train(opt, device):
                 target = text[:, 1:].to(device)  # without [GO] Symbol
                 cost = criterion(preds.view(-1, preds.shape[-1]).contiguous(), target.contiguous().view(-1))
 
-            model.zero_grad()
-            cost.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
-            optimizer.step()
+            # --accum_steps N: gradients of N batches are summed before each optimizer step
+            (cost / opt.accum_steps).backward()
+            if (i + 1) % opt.accum_steps == 0 or i + 1 == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
+                optimizer.step()
+                model.zero_grad()
 
             loss_avg.add(cost)
         
@@ -215,9 +230,7 @@ def train(opt, device):
         with torch.no_grad():
             valid_loss, current_accuracy, current_norm_ED, _ = validation(
                 model, criterion, valid_loader, converter, opt, device)
-        model.train()
-        if opt.freeze_FE:
-            model.FeatureExtraction.eval()
+        set_train_mode(model, opt)
         # training loss and validation loss
         loss_log = f'[{epoch+1}/{opt.num_epochs}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
         loss_avg.reset()
@@ -263,9 +276,11 @@ if __name__ == '__main__':
     parser.add_argument('--repeat_data', type=str, default='',
                         help='oversample LMDB sub-folders, e.g. "real:5,utrset:2" repeats folders whose path contains real 5x')
     parser.add_argument('--freeze_FE', action='store_true', help='freeze the CNN feature extractor (stage-1 fine-tuning)')
+    parser.add_argument('--freeze_bn', action='store_true', help='keep pretrained BatchNorm statistics (use with small batches)')
+    parser.add_argument('--accum_steps', type=int, default=1, help='accumulate gradients over this many batches per optimizer step')
     parser.add_argument('--total_data_usage_ratio', type=str, default='1.0',
                         help='total data usage ratio, this ratio is multiplied to total number of data.')
-    parser.add_argument('--batch_max_length', type=int, default=100, help='maximum-label-length')
+    parser.add_argument('--batch_max_length', type=int, default=250, help='maximum-label-length (vowelled Arabic lines are often 130-200 characters)')
     parser.add_argument('--charset', default='UrduGlyphs.txt', help='glyph list, one character per line (use UrduGlyphs_extended.txt for Arabic/Islamic text)')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=400, help='the width of the input image')

@@ -18,7 +18,7 @@ import random
 import numpy as np
 from PIL import Image
 import torchvision.transforms as T
-from torch._utils import _accumulate
+from itertools import accumulate as _accumulate  # torch._utils._accumulate was removed in PyTorch 2
 from torch.utils.data import Dataset, ConcatDataset, Subset
 
 class Batch_Balanced_Dataset(object):
@@ -185,16 +185,15 @@ class LmdbDataset(Dataset):
         if self.transform is None:
             self.transform = []
         if self.rand_aug:
-            from modules.augmentation import rand_augment_transform,salt_and_pepper_noise, random_border_crop, random_resize
+            from modules.augmentation import rand_augment_transform,salt_and_pepper_noise, random_border_crop, random_resize, random_rotation
             self.transform.append(rand_augment_transform())
             self.transform.append(T.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.25))
-            if random.random()<0.25:
-                self.transform.append(lambda img: salt_and_pepper_noise(img))
-            if random.random()<0.25:
-                self.transform.append(lambda img: random_border_crop(img))
-            self.transform.append(T.RandomRotation(5))
-            if random.random()<0.25:
-                self.transform.append(lambda img: random_resize(img))
+            # RandomApply draws per image; a random.random() test here would switch these on or off
+            # for the whole dataset at start-up
+            self.transform.append(T.RandomApply([salt_and_pepper_noise], p=0.25))
+            self.transform.append(T.RandomApply([random_border_crop], p=0.25))
+            self.transform.append(random_rotation)  # T.RandomRotation(5) cut the ends off long lines
+            self.transform.append(T.RandomApply([random_resize], p=0.25))
             self.transform = T.Compose(self.transform)
 
     def __len__(self):
