@@ -14,6 +14,10 @@ The Poster:
 ![P2 49-poster](https://github.com/abdur75648/UTRNet-High-Resolution-Urdu-Text-Recognition/assets/66300465/dea7c7a6-5e13-400f-8ba7-8356a794897d)
 
 
+## Fine-tuning for Arabic matn and honorifics (Urdu hadith books)
+See [FINETUNE_ARABIC.md](FINETUNE_ARABIC.md): extended glyph list, checkpoint expansion, synthetic
+line generation, cutting corrected pages into training lines, and per-script evaluation.
+
 ## Using This Repository
 ### Environment
 * Python 3.7

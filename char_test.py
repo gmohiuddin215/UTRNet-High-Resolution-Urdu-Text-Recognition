@@ -183,6 +183,7 @@ if __name__ == '__main__':
     parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
     """ Data processing """
     parser.add_argument('--batch_max_length', type=int, default=100, help='maximum-label-length')
+    parser.add_argument('--charset', default='UrduGlyphs.txt', help='glyph list, one character per line (use UrduGlyphs_extended.txt for Arabic/Islamic text)')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=400, help='the width of the input image')
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
@@ -203,7 +204,7 @@ if __name__ == '__main__':
         opt.output_channel = 32
 
     """ vocab / character number configuration """
-    file = open("UrduGlyphs.txt","r",encoding="utf-8")
+    file = open(opt.charset,"r",encoding="utf-8")
     content = file.readlines()
     content = ''.join([str(elem).strip('\n') for elem in content])
     opt.character = content+" "

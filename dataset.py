@@ -123,10 +123,19 @@ def hierarchical_dataset(root, opt, select_data='/', rand_aug = False):
 
             if select_flag:
                 dataset = LmdbDataset(dirpath, opt, rand_aug=rand_aug)
+                # --repeat_data real:5 -> sub-folders whose path contains "real" are used 5 times per epoch
+                # (training set only: rand_aug is True only for the training loader)
+                repeat = 1
+                for rule in filter(None, getattr(opt, 'repeat_data', '').split(',') if rand_aug else []):
+                    name, times = rule.rsplit(':', 1)
+                    if name in os.path.relpath(dirpath, root):
+                        repeat = int(times)
                 sub_dataset_log = f'sub-directory:\t/{os.path.relpath(dirpath, root)}\t num samples: {len(dataset)}'
+                if repeat > 1:
+                    sub_dataset_log += f'\t repeated x{repeat}'
                 # print(sub_dataset_log)
                 dataset_log += f'{sub_dataset_log}\n'
-                dataset_list.append(dataset)
+                dataset_list.extend([dataset] * repeat)
 
     concatenated_dataset = ConcatDataset(dataset_list)
 
@@ -148,25 +157,31 @@ class LmdbDataset(Dataset):
             nSamples = int(txn.get('num-samples'.encode()))
             self.nSamples = nSamples
             self.filtered_index_list = []
+            # re.escape is required: the glyph list contains ] \ - ^ which otherwise break the character class
+            out_of_char = re.compile(f'[^{re.escape(self.opt.character)}]')
+            n_too_long, n_out_of_char = 0, 0
             for index in range(self.nSamples):
                 index += 1  # lmdb starts with 1
                 label_key = 'label-%09d'.encode() % index
                 label = txn.get(label_key).decode('utf-8')
 
                 if len(label) > self.opt.batch_max_length:
-                    # print(f'The length of the label is longer than max_length: length {len(label)}, {label} in dataset {self.root}')
+                    n_too_long += 1
                     continue
 
                 # By default, images containing characters which are not in opt.character are filtered.
                 # You can add [UNK] token to `opt.character` in utils.py instead of this filtering
-                out_of_char = f'[^{self.opt.character}]'
-                if re.search(out_of_char, label):
-                    print ("This string contains a character not part of our dictionnary")
+                if out_of_char.search(label):
+                    n_out_of_char += 1
                     continue
 
                 self.filtered_index_list.append(index)
 
-                self.nSamples = len(self.filtered_index_list)
+            self.nSamples = len(self.filtered_index_list)
+            if n_too_long or n_out_of_char:
+                print(f'{root}: skipped {n_too_long} labels longer than --batch_max_length '
+                      f'({self.opt.batch_max_length}) and {n_out_of_char} labels with characters '
+                      f'outside --charset; kept {self.nSamples}')
         if self.transform is None:
             self.transform = []
         if self.rand_aug:
@@ -218,7 +233,7 @@ class LmdbDataset(Dataset):
                 label = '[dummy_label]'
 
             # We only train and evaluate on alphanumerics (or pre-defined character set in train.py)
-            out_of_char = f'[^{self.opt.character}]'
+            out_of_char = f'[^{re.escape(self.opt.character)}]'
             label = re.sub(out_of_char, '', label)
 
             if self.transform:

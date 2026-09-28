@@ -91,10 +91,21 @@ def train(opt, device):
     model.train()
     if opt.saved_model != '':
         logger.log(f'loading pretrained model from {opt.saved_model}')
+        state_dict = torch.load(opt.saved_model, map_location=device)
+        pred_w = state_dict.get('Prediction.weight')
+        if pred_w is not None and pred_w.shape[0] != opt.num_class:
+            raise SystemExit(f'{opt.saved_model} predicts {pred_w.shape[0]} classes but --charset {opt.charset} '
+                             f'gives {opt.num_class}. Run expand_charset.py on the checkpoint first.')
         if opt.FT:
-            model.load_state_dict(torch.load(opt.saved_model), strict=False)
+            model.load_state_dict(state_dict, strict=False)
         else:
-            model.load_state_dict(torch.load(opt.saved_model))
+            model.load_state_dict(state_dict)
+    if opt.freeze_FE:
+        # train only the BiLSTMs and the output layer; BatchNorm statistics stay as pretrained
+        for p in model.FeatureExtraction.parameters():
+            p.requires_grad = False
+        model.FeatureExtraction.eval()
+        logger.log('Feature extractor frozen (--freeze_FE)')
     logger.log("Model:")
     logger.log(model)
 
@@ -205,6 +216,8 @@ def train(opt, device):
             valid_loss, current_accuracy, current_norm_ED, _ = validation(
                 model, criterion, valid_loader, converter, opt, device)
         model.train()
+        if opt.freeze_FE:
+            model.FeatureExtraction.eval()
         # training loss and validation loss
         loss_log = f'[{epoch+1}/{opt.num_epochs}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
         loss_avg.reset()
@@ -247,9 +260,13 @@ if __name__ == '__main__':
                         help='select training data (default is MJ-ST, which means MJ and ST used as training data)')
     parser.add_argument('--batch_ratio', type=str, default='1',
                         help='assign ratio for each selected data in the batch')
+    parser.add_argument('--repeat_data', type=str, default='',
+                        help='oversample LMDB sub-folders, e.g. "real:5,utrset:2" repeats folders whose path contains real 5x')
+    parser.add_argument('--freeze_FE', action='store_true', help='freeze the CNN feature extractor (stage-1 fine-tuning)')
     parser.add_argument('--total_data_usage_ratio', type=str, default='1.0',
                         help='total data usage ratio, this ratio is multiplied to total number of data.')
     parser.add_argument('--batch_max_length', type=int, default=100, help='maximum-label-length')
+    parser.add_argument('--charset', default='UrduGlyphs.txt', help='glyph list, one character per line (use UrduGlyphs_extended.txt for Arabic/Islamic text)')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=400, help='the width of the input image')
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
@@ -275,7 +292,7 @@ if __name__ == '__main__':
     os.makedirs(f'./saved_models/{opt.exp_name}', exist_ok=True)
 
     """ vocab / character number configuration """
-    file = open("UrduGlyphs.txt","r",encoding="utf-8")
+    file = open(opt.charset,"r",encoding="utf-8")
     content = file.readlines()
     content = ''.join([str(elem).strip('\n') for elem in content])
     opt.character = content+" "

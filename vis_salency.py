@@ -134,6 +134,7 @@ if __name__== "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--vis_dir', type=str, default='vis_salency_maps', help='path to save visualization')
     parser.add_argument('--image_path', type=str, default=None, help='path to image for feature map visualization')
+    parser.add_argument('--charset', default='UrduGlyphs.txt', help='glyph list, one character per line (use UrduGlyphs_extended.txt for Arabic/Islamic text)')
     parser.add_argument('--FeatureExtraction', type=str, required=True, help='FeatureExtraction stage')
     parser.add_argument('--SequenceModeling', type=str, required=True, help='SequenceModeling stage')
     parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage')
@@ -143,7 +144,7 @@ if __name__== "__main__":
     parser.add_argument('--hidden_size', type=int, default=256, help='Size of the BiLSTM hidden state')
     opt = parser.parse_args()
     """ vocab / character number configuration """
-    file = open("UrduGlyphs.txt","r",encoding="utf-8")
+    file = open(opt.charset,"r",encoding="utf-8")
     content = file.readlines()
     content = ''.join([str(elem).strip('\n') for elem in content])
     opt.character = content+" "
