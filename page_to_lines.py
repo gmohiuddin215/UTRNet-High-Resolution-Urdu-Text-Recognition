@@ -42,7 +42,11 @@ def otsu(gray):
     denom = omega * (1 - omega)
     denom[denom == 0] = 1e-9
     sigma_b = (mu_t * omega - mu) ** 2 / denom
-    return int(np.nanargmax(sigma_b))
+    # Otsu's class 0 is "value <= t"; return t + 1 so callers can test `gray < otsu(gray)`.
+    # On a black-and-white scan every t from 0 to 254 scores the same: take the middle of the
+    # tied range, or nothing would count as ink (t = 0 means only pixels below 0)
+    best = np.flatnonzero(sigma_b >= np.nanmax(sigma_b) - 1e-9)
+    return int(best[0] + best[-1]) // 2 + 1
 
 
 def deskew(gray, limit=2.0, step=0.25):
