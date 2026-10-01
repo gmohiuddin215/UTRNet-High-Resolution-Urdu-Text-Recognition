@@ -67,7 +67,17 @@ Changes to the original scripts:
   unambiguous. You may *type* the sign or ligature (ﷺ ؐ ؓ ؒ ؑ) in your transcriptions:
   `page_to_lines.py` and `eval_lines.py` turn them into the phrase (see `urdu_text.py`).
 * Type exactly what is printed: if the book writes اَبِیْ with Urdu ی, do not "correct" it to
-  أبي. The model can only learn what it sees.
+  أبي. The model can only learn what it sees. For Indo-Pak prints of Arabic (as in the
+  Jahangiri Sunan Ibn Majah) that means:
+  * alef with hamza is printed as a bare alef carrying the vowel: اَبُوْ، اِذَا، اَنْبَاَنَا
+  * a final ya without dots is ی (U+06CC), also for alef maqsura: اَبِیْ، عَلٰی، صَلَّی؛ a ya
+    with dots is ي (U+064A): شَيْبَةَ، يَقُوْلُ
+  * long vowels carry sukun when printed: رَسُوْلُ، فِیْ
+  * the name of Allah with shadda and standing alef: اللّٰهِ
+  * Arabic letters in Arabic text (ه ك ة), Urdu letters in Urdu text (ہ ک ی ے)
+  * idgham shadda where printed: طَائِفَةٌ مِّنْ، خَطًّا وَّخَطَّ
+  * a line that cannot be labelled cleanly (a rule, a smudge, a footnote wrapped onto two rows
+    in one band, a damaged line) gets `#`
 * Text is NFC-normalised and zero-width characters (ZWNJ, direction marks) and tatweel are
   removed, so the same printed word always gets the same label.
 
