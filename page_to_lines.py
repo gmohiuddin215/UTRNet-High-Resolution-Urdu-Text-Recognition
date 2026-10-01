@@ -82,6 +82,18 @@ def erase_rules(ink, min_frac, margin=3):
     return out
 
 
+def rule_rows(ink, min_frac):
+    """Rows containing a horizontal run longer than min_frac of the page width."""
+    import numpy as np
+    min_len = int(min_frac * ink.shape[1])
+    rows = []
+    for y in np.where(ink.sum(axis=1) >= min_len)[0]:
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], ink[y].astype("int8"), [0]))))
+        if (edges[1::2] - edges[::2]).max() >= min_len:
+            rows.append(y)
+    return rows
+
+
 def runs(mask):
     """(start, end) of consecutive True runs."""
     out, start = [], None
@@ -96,7 +108,7 @@ def runs(mask):
     return out
 
 
-def find_lines(ink, min_gap, min_height, split, low, strong=0.5):
+def find_lines(ink, min_gap, min_height, split, low, strong=0.5, raw=None, rule_frac=0.15):
     """Text lines as (top, bottom) crop limits.
 
     Two thresholds: a low one finds every region with text (so short last lines and small
@@ -110,6 +122,11 @@ def find_lines(ink, min_gap, min_height, split, low, strong=0.5):
     k = max(3, ink.shape[0] // 400) | 1
     smooth = np.convolve(proj, np.ones(k) / k, mode="same")
     ref = float(np.percentile(smooth[smooth > 0], 90))
+    if raw is not None:
+        # a rule always separates lines: never let a text region run across one (a footnote
+        # rule touching the last line of the body text would otherwise merge the two)
+        for y in rule_rows(raw, rule_frac):
+            smooth[max(0, y - 1):y + 2] = 0
 
     regions = []
     for r in runs(smooth > max(1.0, low * ref)):                 # merge tiny gaps (split dots)
@@ -135,7 +152,58 @@ def find_lines(ink, min_gap, min_height, split, low, strong=0.5):
             cuts.append(top + e1 + int(np.argmin(seg[e1:s2])))
         cuts.append(bottom)
         lines += [(a, b) for a, b in zip(cuts, cuts[1:]) if b - a >= min_height]
-    return lines
+    lines = split_tall(lines, smooth)
+    # raw: ink before erase_rules(); a band whose original ink was mostly a rule is not text
+    raw = ink if raw is None else raw
+    return [l for l in lines if not is_rule(raw[l[0]:l[1]])]
+
+
+def split_tall(lines, smooth, tall=1.6, part=0.5, dip=0.4):
+    """Second pass for lines that touch. Tightly set lines (vowelled matn, or a short last line
+    with little ink) can leave no row empty enough for the first pass. In a band much taller than
+    the page's typical line, cut at every clear valley: a row whose ink is at most `dip` x the
+    peak within one line height on each side, at least `part` x a line height from the band edges
+    and from other cuts. A large title is not cut: its harakat part is far smaller than a line."""
+    import numpy as np
+    if len(lines) < 3:
+        return lines
+    typical = float(np.median([b - t for t, b in lines]))
+    reach, gap = int(typical), int(part * typical)
+    out = []
+    for t, b in lines:
+        if b - t <= tall * typical:
+            out.append((t, b))
+            continue
+        valleys = []
+        for y in range(t + gap, b - gap):
+            left, right = smooth[max(t, y - reach):y], smooth[y + 1:min(b, y + 1 + reach)]
+            window = smooth[max(t, y - gap // 2):y + gap // 2 + 1]
+            if (smooth[y] == window.min() and len(left) and len(right)
+                    and smooth[y] <= dip * min(left.max(), right.max())):
+                valleys.append(y)
+        cuts = []
+        for y in sorted(valleys, key=lambda v: smooth[v]):      # deepest first, keep them apart
+            if all(abs(y - c) >= gap for c in cuts):
+                cuts.append(y)
+        edges = [t] + sorted(cuts) + [b]
+        out += list(zip(edges, edges[1:]))
+    return out
+
+
+def is_rule(band, min_frac=0.05, share=0.7):
+    """True for a band that is mostly long horizontal strokes: leftovers of a rule that
+    erase_rules() missed (broken, sloped or anti-aliased lines on low-resolution scans)."""
+    import numpy as np
+    total = band.sum()
+    if not total:
+        return True
+    min_len = max(20, int(min_frac * band.shape[1]))
+    in_runs = 0
+    for row in band:
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype("int8"), [0]))))
+        lengths = edges[1::2] - edges[::2]
+        in_runs += lengths[lengths >= min_len].sum()
+    return in_runs > share * total
 
 
 def read_labels(txt):
@@ -188,11 +256,12 @@ def main():
         if angle:
             img = img.rotate(angle, resample=Image.BICUBIC, fillcolor=255, expand=True)
         gray = np.asarray(img)
-        ink = erase_rules(gray < otsu(gray), a.rule)
+        raw = gray < otsu(gray)
+        ink = erase_rules(raw, a.rule)
 
         min_gap = a.min_gap or max(4, img.height // 300)
         min_height = a.min_height or max(12, img.height // 120)
-        lines = find_lines(ink, min_gap, min_height, a.split, a.low, a.strong)
+        lines = find_lines(ink, min_gap, min_height, a.split, a.low, a.strong, raw, a.rule)
         lines = [(max(0, t - a.pad), min(img.height, b + a.pad)) for t, b in lines]
 
         prev = img.convert("RGB")
