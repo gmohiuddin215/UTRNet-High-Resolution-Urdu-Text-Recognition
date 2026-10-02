@@ -128,7 +128,9 @@ then skips the line), so a gap is not fatal, just less variety.
 ## 3. Corpus
 
 * `arabic_matn.txt`: hadith isnad and matn, one sentence per line, ideally from the collections you
-  are scanning. Vowelled text is best; unvowelled lines get random harakat added.
+  are scanning, vowelled as printed. Lines are rendered exactly as written: make_lines.py never
+  adds harakat, never appends text to a hadith or verse, and never joins two passages, so use a
+  verified source (wrong text in the corpus means wrong text in the images).
 * `urdu.txt`: Urdu translation text from similar books.
 
 A few MB of each is plenty. Matching the domain matters more than the amount.

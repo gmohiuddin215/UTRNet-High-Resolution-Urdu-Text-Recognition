@@ -88,21 +88,6 @@ def num(rng, lo=1, hi=999, system=None):
     return "".join(d[int(c)] for c in str(rng.randint(lo, hi)))
 
 
-def vowelize(text, rng, rate=0.85):
-    """Add random harakat to unvowelled text (never to letters that already carry a mark)."""
-    letters = sum("ء" <= c <= "ي" for c in text)
-    if not letters or sum(c in HARAKAT for c in text) / letters > 0.2:
-        return text                                              # already vowelled: keep as is
-    out = []
-    for i, ch in enumerate(text):
-        out.append(ch)
-        nxt = text[i + 1] if i + 1 < len(text) else ""
-        if ("ء" <= ch <= "ي" and ch not in "اوي" and nxt not in HARAKAT
-                and rng.random() < rate):
-            out.append(rng.choice(VOWELS))
-    return "".join(out)
-
-
 def read_corpus(path, min_len=8):
     if not path:
         return []
@@ -110,11 +95,14 @@ def read_corpus(path, min_len=8):
             if len(s) >= min_len]
 
 
-def span(words, rng, lo=3, hi=12):
-    if not words:
+def span(lines, rng, lo=3, hi=12):
+    """A run of consecutive words from ONE corpus line, so text from two different passages
+    is never spliced together."""
+    if not lines:
         return ""
-    n = rng.randint(lo, hi)
-    i = rng.randrange(max(1, len(words) - n))
+    words = rng.choice(lines)
+    n = min(rng.randint(lo, hi), len(words))
+    i = rng.randrange(max(1, len(words) - n + 1))
     return " ".join(words[i:i + n])
 
 
@@ -138,15 +126,16 @@ def compose(kind, urdu_words, arabic_lines, rng):
         return segs
     if kind == "arabic_matn":
         base = rng.choice(arabic_lines) if arabic_lines and rng.random() < 0.7 else rng.choice(AR_ISNAD)
-        txt = vowelize(base, rng, rng.uniform(0.6, 1.0)) if rng.random() < 0.7 else base
-        segs = [seg(txt, "ar", 1.0, rng.random() < 0.6)]
+        if rng.random() < 0.15:                 # a name + honorific phrase on its own line
+            base = rng.choice(AR_HONORIFIC_PHRASES)
+        # Arabic text is used exactly as written in the corpus: no harakat are added and nothing
+        # is appended, so no line shows a verse or hadith wording that is not in the source.
+        segs = [seg(base, "ar", 1.0, rng.random() < 0.6)]
         if rng.random() < 0.4:
             segs.insert(0, seg(num(rng, 1, 400, DIGITS[0]) + "- ", "ar", 1.0, True))
-        if rng.random() < 0.3:
-            segs.append(seg(" " + rng.choice(AR_HONORIFIC_PHRASES), "ar", 1.0, segs[-1]["bold"]))
         return segs
     if kind == "mixed":
-        ar = vowelize(rng.choice(arabic_lines) if arabic_lines else rng.choice(AR_ISNAD), rng, 0.8)
+        ar = rng.choice(arabic_lines) if arabic_lines else rng.choice(AR_ISNAD)
         ur = span(urdu_words, rng, 3, 7) or "ترجمہ یہ ہے"
         return ([seg(ar, "ar", 1.0, True), seg(" " + ur)] if rng.random() < 0.5 else
                 [seg(ur + " "), seg(ar, "ar", 1.0, True)])
@@ -329,9 +318,14 @@ def main():
     rng, nrng = random.Random(a.seed), np.random.default_rng(a.seed)
     charset = load_charset(a.charset)
     max_width = a.max_width or 36 * a.imgH
-    urdu_words = " ".join(read_corpus(a.urdu_corpus)).split()
+    # Urdu corpus: one word list per line. Lines that are mostly vowelled Arabic (Quran verses
+    # quoted inside Urdu books) are left out: Arabic comes only from --arabic_corpus.
+    urdu_lines = [l.split() for l in read_corpus(a.urdu_corpus)
+                  if sum(c in HARAKAT for c in l) < 5 and len(l.split()) >= 3]
+    urdu_words = urdu_lines
     arabic_lines = read_corpus(a.arabic_corpus)
-    print(f"corpus: {len(urdu_words):,} Urdu words, {len(arabic_lines):,} Arabic lines")
+    print(f"corpus: {len(urdu_lines):,} Urdu lines ({sum(map(len, urdu_lines)):,} words), "
+          f"{len(arabic_lines):,} Arabic lines")
 
     kinds = (["urdu_honorific"] * int(a.p_urdu_honorific * 100) +
              ["arabic_matn"] * int(a.p_arabic_matn * 100) +
