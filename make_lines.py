@@ -30,11 +30,43 @@ from pathlib import Path
 
 from urdu_text import HONORIFICS, HARAKAT, clean, load_charset, outside
 
-NAMES = ["رسول اللہ", "نبی اکرم", "حضرت ابوہریرہ", "حضرت ابوبکر", "حضرت عمر", "حضرت عائشہ",
-         "امام ابن ماجہ", "امام بخاری", "امام مسلم", "حضرت انس", "حضرت عبد اللہ بن عمر",
-         "حضرت موسیٰ", "حضرت علی", "حضرت فاطمہ", "امام ابوحنیفہ"]
+# Every name is paired only with the honorifics that belong to it: ﷺ for the Prophet, جل جلالہ
+# for Allah, رضی اللہ عنہ / عنہا / عنہما / عنہم for Companions, علیہ السلام for prophets and
+# angels, رحمۃ اللہ علیہ for later scholars. Never mix these.
+NAME_GROUPS = [
+    (["رسول اللہ", "نبی اکرم", "نبی کریم", "حضور", "رسول اکرم", "حضور اکرم", "سرکار دو عالم",
+      "آقا", "حضرت محمد", "نبی"], ["صلی اللہ علیہ وسلم", "صلی اللہ علیہ وآلہ وسلم"]),
+    (["اللہ", "اللہ تعالیٰ", "رب العزت", "باری تعالیٰ", "اللہ رب العزت"], ["جل جلالہ"]),
+    (["حضرت ابوہریرہ", "حضرت ابوبکر صدیق", "حضرت عمر فاروق", "حضرت عثمان غنی", "حضرت علی",
+      "حضرت انس", "حضرت عبد اللہ بن مسعود", "حضرت جابر بن عبد اللہ", "حضرت ابوسعید خدری",
+      "حضرت معاذ بن جبل", "حضرت بلال", "حضرت ابوذر غفاری", "حضرت سعد بن ابی وقاص",
+      "حضرت عرباض بن ساریہ", "حضرت خالد بن ولید", "حضرت حذیفہ"], ["رضی اللہ عنہ"]),
+    (["حضرت عائشہ صدیقہ", "حضرت خدیجہ", "حضرت ام سلمہ", "حضرت فاطمہ", "حضرت اسماء بنت ابی بکر",
+      "حضرت حفصہ", "حضرت ام حبیبہ"], ["رضی اللہ عنہا"]),
+    (["حضرت عبد اللہ بن عمر", "حضرت عبد اللہ بن عباس", "حضرت ابن عمر", "حضرت ابن عباس",
+      "حسنین کریمین", "حضرت ابوبکر و عمر"], ["رضی اللہ عنہما"]),
+    (["صحابہ کرام", "اصحاب رسول", "مہاجرین و انصار", "خلفائے راشدین", "اہل بیت"], ["رضی اللہ عنہم"]),
+    (["حضرت موسیٰ", "حضرت عیسیٰ", "حضرت ابراہیم", "حضرت نوح", "حضرت آدم", "حضرت یوسف",
+      "حضرت جبرائیل", "حضرت سلیمان", "حضرت داؤد", "حضرت یونس"], ["علیہ السلام"]),
+    (["حضرت مریم"], ["علیہا السلام"]),
+    (["انبیاء کرام", "انبیائے کرام", "تمام انبیاء"], ["علیہم السلام"]),
+    (["امام ابن ماجہ", "امام بخاری", "امام مسلم", "امام ابوحنیفہ", "امام مالک", "امام شافعی",
+      "امام احمد بن حنبل", "امام ترمذی", "امام نووی", "قاضی عیاض"], ["رحمۃ اللہ علیہ", "رحمہ اللہ"]),
+]
+NAMES = [n for names, _ in NAME_GROUPS for n in names]
+
 # Arabic samples use the Indo-Pak print convention of FINETUNE_ARABIC.md (اَبِیْ, اللّٰهِ, صَلَّی)
-AR_HONORIFICS = ["صَلَّی اللّٰهُ عَلَيْهِ وَسَلَّمَ", "رَضِیَ اللّٰهُ عَنْهُ", "عَلَيْهِ السَّلَامُ"]
+# Arabic name + its honorific, appended as one phrase (never an honorific on its own)
+AR_HONORIFIC_PHRASES = ["قَالَ رَسُوْلُ اللّٰهِ صَلَّی اللّٰهُ عَلَيْهِ وَسَلَّمَ",
+                        "عَنِ النَّبِیِّ صَلَّی اللّٰهُ عَلَيْهِ وَسَلَّمَ",
+                        "اَنَّ رَسُوْلَ اللّٰهِ صَلَّی اللّٰهُ عَلَيْهِ وَسَلَّمَ قَالَ",
+                        "عَنْ اَبِیْ هُرَيْرَةَ رَضِیَ اللّٰهُ عَنْهُ",
+                        "عَنْ اَنَسِ بْنِ مَالِكٍ رَضِیَ اللّٰهُ عَنْهُ",
+                        "عَنْ عَائِشَةَ رَضِیَ اللّٰهُ عَنْهَا",
+                        "عَنِ ابْنِ عَبَّاسٍ رَضِیَ اللّٰهُ عَنْهُمَا",
+                        "عَنْ مُوْسٰی عَلَيْهِ السَّلَامُ",
+                        "قَالَ اللّٰهُ عَزَّ وَجَلَّ",
+                        "قَالَ اللّٰهُ تَبَارَكَ وَتَعَالٰی"]
 AR_ISNAD = ["حَدَّثَنَا اَبُوْ بَكْرِ بْنُ اَبِیْ شَيْبَةَ قَالَ حَدَّثَنَا شَرِيْكٌ عَنِ الْاَعْمَشِ عَنْ اَبِیْ صَالِحٍ",
             "عَنْ اَبِیْ هُرَيْرَةَ قَالَ قَالَ رَسُوْلُ اللّٰهِ",
             "حَدَّثَنَا مُحَمَّدُ بْنُ الصَّبَّاحِ قَالَ اَنْبَاَنَا جَرِيْرٌ عَنِ الْاَعْمَشِ",
@@ -94,12 +126,14 @@ def seg(text, script="ur", scale=1.0, bold=False, hon=None):
 # segments are listed in reading order (right to left on the page)
 def compose(kind, urdu_words, arabic_lines, rng):
     if kind == "urdu_honorific":
-        segs = [seg(rng.choice(NAMES)), seg("", hon=rng.choice(list(HONORIFICS))),
+        names, hons = rng.choice(NAME_GROUPS)
+        segs = [seg(rng.choice(names)), seg("", hon=rng.choice(hons)),
                 seg(" " + (span(urdu_words, rng, 3, 8) or rng.choice(UR_TAIL)))]
         if rng.random() < 0.35:
             segs.insert(0, seg(num(rng, 1, 400, DIGITS[0]) + "- ", bold=True))
         if rng.random() < 0.4:                                   # a second honorific later in the line
-            segs += [seg(" " + rng.choice(NAMES)), seg("", hon=rng.choice(list(HONORIFICS))),
+            names, hons = rng.choice(NAME_GROUPS)
+            segs += [seg(" " + rng.choice(names)), seg("", hon=rng.choice(hons)),
                      seg(" " + rng.choice(UR_TAIL))]
         return segs
     if kind == "arabic_matn":
@@ -109,7 +143,7 @@ def compose(kind, urdu_words, arabic_lines, rng):
         if rng.random() < 0.4:
             segs.insert(0, seg(num(rng, 1, 400, DIGITS[0]) + "- ", "ar", 1.0, True))
         if rng.random() < 0.3:
-            segs.append(seg(" " + rng.choice(AR_HONORIFICS), "ar", rng.uniform(0.6, 1.0)))
+            segs.append(seg(" " + rng.choice(AR_HONORIFIC_PHRASES), "ar", 1.0, segs[-1]["bold"]))
         return segs
     if kind == "mixed":
         ar = vowelize(rng.choice(arabic_lines) if arabic_lines else rng.choice(AR_ISNAD), rng, 0.8)
