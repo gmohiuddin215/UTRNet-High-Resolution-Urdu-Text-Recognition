@@ -264,3 +264,10 @@ for two or three rounds of correcting pages, retraining and measuring.
 
 For whole pages you still need line detection: `page_to_lines.py` handles clean book scans,
 not arbitrary layouts. The authors' End-To-End-Urdu-OCR-WebApp pairs UTRNet with a YOLOv8 detector.
+
+## 11. Use the trained model on Mac, iPhone and iPad
+
+`ocr_page.py` reads whole pages or PDFs on the Mac (deskew, line finding, model).
+`export_coreml.py` converts the checkpoint to a float32 Core ML package and verifies that it reads
+your labelled lines identically. `ios/UrduOCR` is the same pipeline as a Swift package for the
+app. Steps are in [ios/README.md](ios/README.md).
