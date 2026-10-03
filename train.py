@@ -243,6 +243,8 @@ def train(opt, device):
         if current_norm_ED > best_norm_ED:
             best_norm_ED = current_norm_ED
             torch.save(model.state_dict(), f'./saved_models/{opt.exp_name}/best_norm_ED.pth')
+        if getattr(opt, 'save_every_epoch', False):
+            torch.save(model.state_dict(), f'./saved_models/{opt.exp_name}/epoch{epoch+1}.pth')
         best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.4f}, {"Best_norm_ED":17s}: {best_norm_ED:0.4f}'
         loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
         logger.log(loss_model_log + '\n')
@@ -259,6 +261,9 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size')
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of epochs to train for')
+    parser.add_argument('--save_every_epoch', action='store_true',
+                        help='also save saved_models/<exp>/epochN.pth after every epoch, so a checkpoint the '
+                             'validation set did not pick can still be compared on real pages')
     parser.add_argument('--valInterval', type=int, default=500, help='Interval between each validation')
     parser.add_argument('--saved_model', default='', help="path to model to continue training")
     parser.add_argument('--FT', action='store_true', help='whether to do fine-tuning')

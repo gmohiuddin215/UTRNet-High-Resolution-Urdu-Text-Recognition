@@ -25,6 +25,16 @@ from pathlib import Path
 from urdu_text import clean, edit_distance, honorifics_in, is_arabic, strip_harakat, HARAKAT
 
 
+# Letters that print identically in these fonts (medial ي/ی, ك/ک, ة/ۃ) and word spacing, which
+# Urdu print does not show reliably. The lenient CER ignores both, so it counts only what a
+# reader could actually see as wrong.
+_LOOKALIKE = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ة": "ۃ"})
+
+
+def lenient(text):
+    return text.translate(_LOOKALIKE).replace(" ", "")
+
+
 def cer(pairs):
     """Character error rate over (reference, prediction) pairs: total edits / total ref chars."""
     chars = sum(len(r) for r, _ in pairs)
@@ -40,14 +50,15 @@ def score(rows):
         "lines with harakat": [r for r in rows if any(c in HARAKAT for c in r[1])],
         "lines with honorifics": [r for r in rows if honorifics_in(r[1])],
     }
-    out = [f"{'group':24} {'lines':>6} {'CER':>8} {'CER no harakat':>15} {'line acc':>9}"]
+    out = [f"{'group':24} {'lines':>6} {'CER':>8} {'CER no harakat':>15} {'lenient CER':>12} {'line acc':>9}"]
     for name, g in groups.items():
         if not g:
             continue
         pairs = [(r, p) for _, r, p in g]
         bare = [(strip_harakat(r), strip_harakat(p)) for r, p in pairs]
+        loose = [(lenient(r), lenient(p)) for r, p in pairs]
         acc = sum(r == p for r, p in pairs) / len(pairs)
-        out.append(f"{name:24} {len(g):6d} {cer(pairs):8.2%} {cer(bare):15.2%} {acc:9.1%}")
+        out.append(f"{name:24} {len(g):6d} {cer(pairs):8.2%} {cer(bare):15.2%} {cer(loose):12.2%} {acc:9.1%}")
 
     total = hit = 0
     for _, ref, pred in rows:
@@ -157,6 +168,7 @@ def main():
               "horizontally (same as in training, but heavy squeezing costs accuracy)")
     print()
     print("\n".join(score(rows)))
+    print("\nlenient CER: spaces ignored, look-alike letters ي/ی ى/ی ك/ک ة/ۃ counted as equal")
 
     ranked = sorted(rows, key=lambda r: edit_distance(r[1], r[2]) / max(1, len(r[1])), reverse=True)
     print(f"\nworst {min(opt.worst, len(ranked))} lines:")
