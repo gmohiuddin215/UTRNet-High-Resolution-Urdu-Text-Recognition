@@ -60,14 +60,26 @@ extension GrayImage {
         self.init(width: w, height: h, pixels: px)
     }
 
-    /// A PNG/JPEG/TIFF/HEIC file (first frame). Use PNG when comparing with ocr_page.py: JPEG
-    /// decoders differ slightly between libraries.
+    /// A PNG/JPEG/TIFF/HEIC file (first frame), turned upright if its EXIF says it was taken
+    /// rotated (phone photos). Use PNG when comparing with ocr_page.py: JPEG decoders differ
+    /// slightly between libraries.
     public init(contentsOf url: URL) throws {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            throw ImageLoadError.unreadable(url)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw ImageLoadError.unreadable(url) }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let orientation = (props?[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        let image: CGImage?
+        if orientation == 1 {
+            image = CGImageSourceCreateImageAtIndex(src, 0, nil)
+        } else {
+            let w = (props?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+            let h = (props?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+            let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                         kCGImageSourceCreateThumbnailWithTransform: true,
+                                         kCGImageSourceThumbnailMaxPixelSize: max(w, h)]
+            image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
         }
-        self.init(cgImage: img)
+        guard let image else { throw ImageLoadError.unreadable(url) }
+        self.init(cgImage: image)
     }
 
     /// Number of pages of a PDF file (0 if unreadable).

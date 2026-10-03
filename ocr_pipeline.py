@@ -27,9 +27,11 @@ SKEW_LIMIT, SKEW_STEP = 300, 0.05   # angles are searched as k * 0.05 deg, |k| <
 # ---------------------------------------------------------------------------- 1. gray
 
 def load_gray(path_or_image):
-    """uint8 [H, W]. Alpha is composited onto white; RGB -> L uses Pillow's integer formula."""
-    from PIL import Image
+    """uint8 [H, W], upright per EXIF. Alpha is composited onto white; RGB -> L uses Pillow's
+    integer formula."""
+    from PIL import Image, ImageOps
     im = path_or_image if isinstance(path_or_image, Image.Image) else Image.open(path_or_image)
+    im = ImageOps.exif_transpose(im)                     # phone photos: turn upright as Swift does
     if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
         bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
         bg.alpha_composite(im.convert("RGBA"))

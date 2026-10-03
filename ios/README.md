@@ -71,18 +71,43 @@ between pages. `--preview` saves each deskewed page with numbered line boxes. Ch
 reads badly: usually two lines got merged or a line was split. The `.mlpackage` and the `.pth` give
 the same text.
 
-## 4. iPhone / iPad app
+## 4. The app (one project for Mac, iPhone and iPad)
 
-1. In Xcode, create a new **App** (SwiftUI), iOS 16 or later.
-2. **File → Add Package Dependencies… → Add Local…** and choose `ios/UrduOCR`. Add the `UrduOCR`
-   library to the app target.
-3. Drag `UrduOCR.mlpackage` into the project (target membership: the app). Xcode compiles it into
-   `UrduOCR.mlmodelc` inside the app.
-4. Replace `ContentView.swift` with `ios/Example/ContentView.swift`.
-5. Info → add **Privacy - Camera Usage Description** (`NSCameraUsageDescription`).
-6. Optional, to display the result in Nastaliq: add `JameelNooriNastaleeq-Regular.ttf` to the
-   target and list it under **Fonts provided by application** (`UIAppFonts`).
-7. Run it on a device (the document camera does not work in the Simulator).
+The example screen has three buttons. **Scan** (iPhone/iPad only) uses the document camera, which
+finds the page and removes perspective. **Photo** picks a page image from Photos. **File** opens a
+page image or a PDF; a PDF is read page by page. Every page is deskewed before reading.
+
+1. Install **Xcode** from the App Store and open it once.
+2. Check that the Swift package builds and reads like the Python script:
+   ```bash
+   cd ios/UrduOCR
+   swift run -c release urdu-ocr --model ../../UrduOCR.mlpackage --units gpu ~/Downloads/p0032.png
+   cd ../..
+   ```
+3. In Xcode: **File → New → Project → Multiplatform → App**. Name it `HadithOCR`, choose Interface
+   *SwiftUI*, and save it anywhere.
+4. **File → Add Package Dependencies… → Add Local…**, choose the `ios/UrduOCR` folder, and add the
+   `UrduOCR` library to the `HadithOCR` target.
+5. Drag `UrduOCR.mlpackage` into the project navigator. Tick *Copy items if needed* and the
+   `HadithOCR` target.
+6. Open `ContentView.swift` in Xcode and replace everything in it with `ios/Example/ContentView.swift`.
+7. Select the `HadithOCR` target → **Info** → **+** → *Privacy - Camera Usage Description*, with
+   the value "Scan book pages".
+8. **Run on the Mac:** choose *My Mac* as the destination at the top and press ⌘R.
+9. **Run on the iPhone:** connect it with a cable and choose it as the destination. In
+   **Signing & Capabilities**, set *Team* to your Apple ID. Press ⌘R. The first time, the iPhone
+   asks you to turn on *Settings → Privacy & Security → Developer Mode* and to trust the developer
+   in *Settings → General → VPN & Device Management*.
+
+With a free Apple ID the app stays on the phone for 7 days; then run it from Xcode again. A paid
+developer account ($99/year) removes that limit and allows TestFlight.
+
+If Xcode reports concurrency errors in `ContentView.swift`, open **Build Settings** and set *Swift
+Language Version* to **Swift 5** and *Default Actor Isolation* to **nonisolated**.
+
+To display the result in Nastaliq, add `JameelNooriNastaleeq-Regular.ttf` to the target and list
+it under *Fonts provided by application* (`UIAppFonts`) for iOS. On the Mac, install the font by
+double-clicking it. Without the font the text is still correct, just in the system font.
 
 Using the library directly:
 
