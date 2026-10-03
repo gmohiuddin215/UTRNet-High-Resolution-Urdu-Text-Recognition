@@ -17,13 +17,15 @@ lines are cut. On the phone the document camera also flattens perspective before
 ```bash
 git clone -b claude/project-understanding-bef1fc https://github.com/gmohiuddin215/UTRNet-High-Resolution-Urdu-Text-Recognition.git
 cd UTRNet-High-Resolution-Urdu-Text-Recognition
-python3 -m venv ~/utrnet-env
+curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.local/bin/env
+uv venv --python 3.12 ~/utrnet-env
 source ~/utrnet-env/bin/activate          # run this again in every new terminal
-pip install torch==2.7.0 coremltools==9.0 numpy pillow pymupdf
+uv pip install torch==2.7.0 coremltools==9.0 numpy pillow pymupdf
 cp -R ~/Downloads/results .               # utrnet_hadith_final.pth + UrduGlyphs_extended.txt
 ```
 
-coremltools 9.0 is tested with torch 2.7; newer torch versions fail to convert this model.
+coremltools 9.0 is tested with torch 2.7, which needs Python 3.13 or older (uv fetches 3.12);
+newer torch versions fail to convert this model.
 
 ## 2. Export to Core ML and verify
 
