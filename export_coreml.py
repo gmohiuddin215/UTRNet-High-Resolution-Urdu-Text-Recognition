@@ -12,6 +12,13 @@ The package holds the network in full 32-bit precision (no fp16, no quantisation
 temporal-dropout masks frozen inside (see deploy_model.py), and the charset in its metadata, so
 the app needs only this one file.
 
+--batch N (default 8) makes the package read N lines per call. The LSTM half of the network
+has to step through each line's 800 columns one after another, so one line at a time leaves the
+CPU/GPU mostly idle; with N lines every step does N lines of work for about the cost of one.
+The arithmetic per line is the same, and the verification below checks the batched package
+against PyTorch reading each line on its own. ocr_page.py and the Swift package read the batch
+size from the package and pad the last batch, so --batch 1 still works with them.
+
 Verification (macOS only; Core ML does not run elsewhere) runs every --gt line image, and every
 --page image, through
   * PyTorch, the deterministic model (the reference)
@@ -33,24 +40,24 @@ from pathlib import Path
 import numpy as np
 
 
-def convert(deploy, charset, out, fp16=False):
+def convert(deploy, charset, out, fp16=False, batch=1):
     import coremltools as ct
     import torch
-    example = torch.zeros(1, 1, 64, 800)
+    example = torch.zeros(batch, 1, 64, 800)
     traced = torch.jit.trace(deploy, example)
     ml = ct.convert(
         traced,
-        inputs=[ct.TensorType(name="image", shape=(1, 1, 64, 800), dtype=np.float32)],
+        inputs=[ct.TensorType(name="image", shape=(batch, 1, 64, 800), dtype=np.float32)],
         outputs=[ct.TensorType(name="logits", dtype=np.float32)],
         convert_to="mlprogram",
         compute_precision=ct.precision.FLOAT16 if fp16 else ct.precision.FLOAT32,
         minimum_deployment_target=ct.target.iOS16)
-    ml.short_description = ("UTRNet fine-tuned for Urdu hadith books. Input: one text line, "
-                            "mirrored, height 64, padded to 800, scaled to [-1, 1]. Output: CTC "
-                            "logits [1, 800, classes], class 0 = blank.")
+    ml.short_description = (f"UTRNet fine-tuned for Urdu hadith books. Input: {batch} text lines, "
+                            "each mirrored, height 64, padded to 800, scaled to [-1, 1]. Output: CTC "
+                            f"logits [{batch}, 800, classes], class 0 = blank.")
     ml.user_defined_metadata["charset"] = json.dumps(list(charset), ensure_ascii=False)
     ml.user_defined_metadata["precision"] = "float16" if fp16 else "float32"
-    ml.user_defined_metadata["input"] = "1x1x64x800"
+    ml.user_defined_metadata["input"] = f"{batch}x1x64x800"
     ml.save(str(out))
     return out
 
@@ -73,6 +80,7 @@ def main():
     ap.add_argument("--saved_model", required=True, help="the trained .pth")
     ap.add_argument("--charset", required=True, help="the charset it was trained with")
     ap.add_argument("--out", default="UrduOCR.mlpackage")
+    ap.add_argument("--batch", type=int, default=8, help="lines read per call (1 = one line at a time)")
     ap.add_argument("--fp16", action="store_true", help="also export and verify a float16 package")
     ap.add_argument("--gt", action="append", default=[], help="image<TAB>label file to verify on (repeatable)")
     ap.add_argument("--page", action="append", default=[], help="page image to verify on, whole pipeline (repeatable)")
@@ -92,11 +100,11 @@ def main():
 
     outs = [Path(a.out)]
     t = time.time()
-    convert(deploy, charset, outs[0])
-    print(f"wrote {outs[0]} (float32) in {time.time() - t:.0f}s")
+    convert(deploy, charset, outs[0], batch=a.batch)
+    print(f"wrote {outs[0]} (float32, {a.batch} lines per call) in {time.time() - t:.0f}s")
     if a.fp16:
         outs.append(outs[0].with_name(outs[0].stem + "_fp16.mlpackage"))
-        convert(deploy, charset, outs[1], fp16=True)
+        convert(deploy, charset, outs[1], fp16=True, batch=a.batch)
         print(f"wrote {outs[1]} (float16)")
 
     if a.skip_verify:
@@ -143,14 +151,20 @@ def main():
             if units_name == "all units" and pkg == outs[0]:
                 continue                          # float32 cannot use the Neural Engine anyway
             ml = ct.models.MLModel(str(pkg), compute_units=units)
+            ml.predict({"image": np.zeros((a.batch, 1, 64, 800), np.float32)})   # warm-up, not timed
             texts, max_diff, same_argmax = [], 0.0, 0
             t = time.time()
-            for (_, x, _), ref in zip(inputs, ref_logits):
-                lg = ml.predict({"image": x[None]})["logits"][0]
-                max_diff = max(max_diff, float(np.abs(lg - ref).max()))
-                same_argmax += int((lg.argmax(1) == ref.argmax(1)).sum())
-                texts.append(ctc_decode(lg.argmax(1), charset))
-            print(f"Core ML {pkg.name} on {units_name}: {time.time() - t:.0f}s")
+            for s in range(0, len(inputs), a.batch):
+                xs = [x for _, x, _ in inputs[s:s + a.batch]]
+                n = len(xs)
+                xs += [xs[-1]] * (a.batch - n)                       # pad the last batch
+                out = ml.predict({"image": np.stack(xs)})["logits"]
+                for lg, ref in zip(out[:n], ref_logits[s:s + n]):
+                    max_diff = max(max_diff, float(np.abs(lg - ref).max()))
+                    same_argmax += int((lg.argmax(1) == ref.argmax(1)).sum())
+                    texts.append(ctc_decode(lg.argmax(1), charset))
+            dt = time.time() - t
+            print(f"Core ML {pkg.name} on {units_name}: {dt:.1f}s, {dt / len(inputs):.2f}s per line")
             rows.append((f"Core ML {pkg.name}, {units_name}", texts, max_diff,
                          same_argmax / (len(inputs) * 800)))
 
@@ -168,7 +182,8 @@ def main():
         diffs = [i for i, (x, y) in enumerate(zip(texts, ref_text)) if x != y]
         for i in diffs[:5]:
             print(f"\n{name} differs on {inputs[i][0]}\n  torch : {ref_text[i]}\n  coreml: {texts[i]}")
-    print("\n'identical text' compares each line with the deterministic PyTorch model. The first row "
+    print("\n'identical text' compares each line with the deterministic PyTorch model reading that line "
+          "on its own. The first row "
           "is model.py as it ran during training, with fresh random masks; it is expected to differ "
           "on a few lines, which is why the exported model freezes the masks.")
 

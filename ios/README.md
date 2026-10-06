@@ -35,6 +35,9 @@ python export_coreml.py --saved_model results/utrnet_hadith_final.pth \
     --gt khatme/val/gt.txt --page some_page.png
 ```
 
+The package reads 8 lines per call (`--batch 8`, the default). `ocr_page.py` and the app read
+the batch size from the package, so a package exported with `--batch 1` still works with them.
+
 `--gt` takes any `image<TAB>label` file (e.g. `khatme/val/gt.txt` from the khatme zips); `--page`
 runs whole pages through deskew and line finding too. Both can be repeated. On a slow Mac add
 `--limit 50`.
@@ -57,6 +60,7 @@ Core ML UrduOCR.mlpackage, CPU+GPU       147/147         ...
   freezes the masks, so it is repeatable. Its CER should match the training numbers within noise.
 * `--fp16` also writes `UrduOCR_fp16.mlpackage`: half the size and able to use the Neural Engine, but
   not lossless. The same table shows how many lines it changes.
+* Each Core ML row also prints its time per line, so one run shows which option is fastest.
 
 ## 3. OCR pages on the Mac
 
@@ -144,9 +148,11 @@ scanning the page twice, not a loss in the model.
   measures this on your own lines.
 * **Pipeline:** the Swift preprocessing is a line-by-line port of `ocr_pipeline.py`. The bicubic
   resize reproduces Pillow bit for bit, which is what training used. Step 5 measures this.
-* **Speed:** float32 cannot run on the Neural Engine. Expect roughly 0.2–1 s per line on recent
-  iPhones and Macs, so a 25-line page takes a few seconds. `--fp16` is the faster option if its row in
-  the table is acceptable to you.
+* **Speed:** most of the time goes to the HRNet image layers, which work on the full 64×800 line.
+  float32 cannot use the Neural Engine, the part of the chip built for exactly this, so the
+  float32 model runs on the CPU or GPU. Reading 8 lines per call keeps the GPU busy. `--fp16`
+  can use the Neural Engine and is the fast option if its row in the table is acceptable to you.
+  `ocr_page.py` and `urdu-ocr` print the page-preparation and reading time for every page.
 * **Page layout:** lines are found by horizontal projection, the same way the training data was cut.
   Single-column pages work. Two-column pages, or photos with heavy curl or a dark background, need
   cropping first. On the phone the document camera does that cropping.

@@ -45,8 +45,11 @@ guard let modelPath, !files.isEmpty else { usage() }
 let computeUnits: MLComputeUnits = units == "gpu" ? .cpuAndGPU : (units == "all" ? .all : .cpuOnly)
 
 func process(_ label: String, _ gray: GrayImage, _ ocr: UrduOCRModel) throws {
+    let t0 = Date()
     let prepared = Preprocess.preparePage(gray, deskew: deskew)
-    let texts = try prepared.lines.map { try ocr.read($0.input) }
+    let t1 = Date()
+    let texts = try ocr.read(lines: prepared.lines.map(\.input))
+    let t2 = Date()
     if dump {
         print("page \(label) skew \(prepared.skewStep) size \(prepared.page.width)x\(prepared.page.height) lines \(prepared.lines.count)")
         for (n, l) in prepared.lines.enumerated() {
@@ -54,13 +57,15 @@ func process(_ label: String, _ gray: GrayImage, _ ocr: UrduOCRModel) throws {
         }
         for (n, t) in texts.enumerated() { print("text \(n + 1) \(t)") }
     } else {
-        print("\n=== \(label)  (deskew \(String(format: "%+.2f", prepared.skewDegrees)) deg, \(prepared.lines.count) lines)")
+        print("\n=== \(label)  (deskew \(String(format: "%+.2f", prepared.skewDegrees)) deg, \(prepared.lines.count) lines; "
+              + String(format: "page prep %.1fs, reading %.1fs)", t1.timeIntervalSince(t0), t2.timeIntervalSince(t1)))
         print(texts.joined(separator: "\n"))
     }
 }
 
 do {
     let ocr = try UrduOCRModel(contentsOf: URL(fileURLWithPath: modelPath), computeUnits: computeUnits)
+    _ = try ocr.read([Float](repeating: 0, count: Preprocess.imgH * Preprocess.imgW))   // load now, not in page 1's time
     for f in files {
         let url = URL(fileURLWithPath: f)
         if url.pathExtension.lowercased() == "pdf" {

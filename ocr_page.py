@@ -27,6 +27,7 @@ whether the app prepares a page exactly like this script.
 import argparse
 import hashlib
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -88,6 +89,9 @@ class Reader:
                 self.charset = list(_load_charset(charset_path))
             if self.charset is None:
                 raise SystemExit("this .mlpackage has no charset inside: pass --charset")
+            # lines per call, fixed when the package was exported (export_coreml.py --batch)
+            self.batch = int(self.ml.get_spec().description.input[0].type.multiArrayType.shape[0])
+            self.ml.predict({"image": np.zeros((self.batch, 1, 64, 800), np.float32)})  # load now, not in page 1's time
             self.torch = None
         else:
             if not charset_path:
@@ -97,16 +101,23 @@ class Reader:
             torch.set_grad_enabled(False)
             self.charset = list(_load_charset(charset_path))
             self.torch = load_deploy(model, "".join(self.charset))
+            self.batch = 8
 
-    def read(self, x):
-        """x: [1, 64, 800] float32 -> text"""
+    def read(self, xs):
+        """xs: list of [1, 64, 800] float32 line tensors -> list of texts"""
         from ocr_pipeline import ctc_decode
-        if self.torch is not None:
-            import torch
-            logits = self.torch(torch.from_numpy(x[None]))[0].numpy()
-        else:
-            logits = self.ml.predict({"image": x[None]})["logits"][0]
-        return ctc_decode(logits.argmax(1), self.charset)
+        texts = []
+        for s in range(0, len(xs), self.batch):
+            chunk = list(xs[s:s + self.batch])
+            n = len(chunk)
+            if self.torch is not None:
+                import torch
+                logits = self.torch(torch.from_numpy(np.stack(chunk))).numpy()
+            else:
+                chunk += [chunk[-1]] * (self.batch - n)          # the package wants a full batch
+                logits = self.ml.predict({"image": np.stack(chunk)})["logits"]
+            texts += [ctc_decode(lg.argmax(1), self.charset) for lg in logits[:n]]
+        return texts
 
 
 def _load_charset(path):
@@ -154,8 +165,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     texts = {}
     for label, stem, gray in iter_pages(a.inputs, a.dpi, a.pages):
+        t0 = time.time()
         k, page, lines = prepare_page(gray, deskew=not a.no_deskew)
-        read = [reader.read(x) for _, x, _ in lines]
+        t1 = time.time()
+        read = reader.read([x for _, x, _ in lines])
+        t2 = time.time()
         if a.dump:
             print(f"page {label} skew {k} size {page.shape[1]}x{page.shape[0]} lines {len(lines)}")
             for i, ((t, b, l, r), _, small) in enumerate(lines):
@@ -164,7 +178,8 @@ def main():
             for i, text in enumerate(read):
                 print(f"text {i + 1} {text}")
             continue
-        print(f"\n=== {label}  (deskew {k * 0.05:+.2f} deg, {len(lines)} lines)")
+        print(f"\n=== {label}  (deskew {k * 0.05:+.2f} deg, {len(lines)} lines; "
+              f"page prep {t1 - t0:.1f}s, reading {t2 - t1:.1f}s)")
         print("\n".join(read))
         part = label.rpartition("#")[2] if "#" in label else None
         texts.setdefault(stem, []).append((part, read))

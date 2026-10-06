@@ -33,6 +33,8 @@ public final class UrduOCRModel {
     public let model: MLModel
     /// Model class i is charset[i - 1]; class 0 is the CTC blank.
     public let charset: [String]
+    /// Lines read per prediction, fixed at export (export_coreml.py --batch).
+    public let batch: Int
 
     /// `url`: a compiled .mlmodelc (what Xcode puts in the app bundle) or an .mlpackage (compiled
     /// here first). `.cpuOnly` runs the float32 network exactly as verified by export_coreml.py;
@@ -51,30 +53,54 @@ public final class UrduOCRModel {
             throw UrduOCRError.noCharset
         }
         charset = cs
+        batch = model.modelDescription.inputDescriptionsByName["image"]?
+            .multiArrayConstraint?.shape.first?.intValue ?? 1
     }
 
     /// Read one prepared line (1 x 64 x 800 floats from Preprocess).
     public func read(_ input: [Float]) throws -> String {
-        let shape = [1, 1, Preprocess.imgH, Preprocess.imgW].map { NSNumber(value: $0) }
-        let arr = try MLMultiArray(shape: shape, dataType: .float32)
-        arr.withUnsafeMutableBufferPointer(ofType: Float.self) { buf, _ in
-            for i in 0..<input.count { buf[i] = input[i] }          // new arrays are contiguous
+        try read(lines: [input])[0]
+    }
+
+    /// Read prepared lines, `batch` per prediction (the last batch is padded).
+    public func read(lines inputs: [[Float]]) throws -> [String] {
+        let size = Preprocess.imgH * Preprocess.imgW
+        var texts: [String] = []
+        var start = 0
+        while start < inputs.count {
+            let n = min(batch, inputs.count - start)
+            let shape = [batch, 1, Preprocess.imgH, Preprocess.imgW].map { NSNumber(value: $0) }
+            let arr = try MLMultiArray(shape: shape, dataType: .float32)
+            arr.withUnsafeMutableBufferPointer(ofType: Float.self) { buf, _ in   // new arrays are contiguous
+                for b in 0..<batch {
+                    let input = inputs[start + min(b, n - 1)]                    // pad with the last line
+                    for i in 0..<size { buf[b * size + i] = input[i] }
+                }
+            }
+            let features = try MLDictionaryFeatureProvider(dictionary: ["image": MLFeatureValue(multiArray: arr)])
+            guard let logits = try model.prediction(from: features).featureValue(for: "logits")?.multiArrayValue else {
+                throw UrduOCRError.noOutput
+            }
+            for b in 0..<n { texts.append(ctcDecode(argmax(logits, line: b))) }
+            start += n
         }
-        let features = try MLDictionaryFeatureProvider(dictionary: ["image": MLFeatureValue(multiArray: arr)])
-        guard let logits = try model.prediction(from: features).featureValue(for: "logits")?.multiArrayValue else {
-            throw UrduOCRError.noOutput
-        }
+        return texts
+    }
+
+    /// Best class at each of the 800 steps of line `b` (first maximum, like numpy argmax).
+    func argmax(_ logits: MLMultiArray, line b: Int) -> [Int] {
         let steps = logits.shape[1].intValue, classes = logits.shape[2].intValue
         let st = logits.strides.map(\.intValue)
         var indices = [Int](repeating: 0, count: steps)
         if logits.dataType == .float32 {
             logits.withUnsafeBufferPointer(ofType: Float.self) { buf in
                 for t in 0..<steps {
+                    let row = b * st[0] + t * st[1]
                     var best = 0
-                    var bestValue = buf[t * st[1]]
+                    var bestValue = buf[row]
                     for c in 1..<classes {
-                        let v = buf[t * st[1] + c * st[2]]
-                        if v > bestValue {                            // first maximum, like argmax
+                        let v = buf[row + c * st[2]]
+                        if v > bestValue {
                             bestValue = v
                             best = c
                         }
@@ -85,9 +111,9 @@ public final class UrduOCRModel {
         } else {
             for t in 0..<steps {
                 var best = 0
-                var bestValue = logits[[0, NSNumber(value: t), 0]].floatValue
+                var bestValue = logits[[NSNumber(value: b), NSNumber(value: t), 0]].floatValue
                 for c in 1..<classes {
-                    let v = logits[[0, NSNumber(value: t), NSNumber(value: c)]].floatValue
+                    let v = logits[[NSNumber(value: b), NSNumber(value: t), NSNumber(value: c)]].floatValue
                     if v > bestValue {
                         bestValue = v
                         best = c
@@ -96,7 +122,7 @@ public final class UrduOCRModel {
                 indices[t] = best
             }
         }
-        return ctcDecode(indices)
+        return indices
     }
 
     /// Greedy CTC: drop repeats, then blanks.
@@ -113,10 +139,8 @@ public final class UrduOCRModel {
     /// Deskew, find lines, read them.
     public func recognize(_ gray: GrayImage, deskew: Bool = true) throws -> PageResult {
         let prepared = Preprocess.preparePage(gray, deskew: deskew)
-        var lines: [LineResult] = []
-        for line in prepared.lines {
-            lines.append(LineResult(box: line.box, text: try read(line.input)))
-        }
+        let texts = try read(lines: prepared.lines.map(\.input))
+        let lines = zip(prepared.lines, texts).map { LineResult(box: $0.box, text: $1) }
         return PageResult(skewDegrees: prepared.skewDegrees, page: prepared.page, lines: lines)
     }
 }
