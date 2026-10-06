@@ -112,6 +112,8 @@ struct ContentView: View {
     }
 
     /// OCR `count` pages off the main thread, showing the text as each page finishes.
+    /// Long jobs keep the GPU busy for minutes and a phone has no fan, so when iOS reports the
+    /// device as hot ("serious"), wait until it has cooled to "fair" before the next page.
     func run(count: Int, page: @escaping (Int) throws -> GrayImage) {
         guard count > 0 else { return }
         busy = true
@@ -119,9 +121,18 @@ struct ContentView: View {
         Task.detached(priority: .userInitiated) {
             do {
                 let ocr = try OCR.model.get()
+                var lastPage = ""
                 for i in 0..<count {
-                    await MainActor.run { status = count > 1 ? "Reading page \(i + 1) of \(count)…" : "Reading…" }
+                    while ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                        await MainActor.run { status = "Phone is hot, cooling down before page \(i + 1)…" }
+                        try await Task.sleep(nanoseconds: 10_000_000_000)
+                    }
+                    await MainActor.run {
+                        status = (count > 1 ? "Reading page \(i + 1) of \(count)…" : "Reading…") + lastPage
+                    }
+                    let start = Date()
                     let result = try ocr.recognize(page(i))
+                    lastPage = String(format: "\n(last page: %.1f s)", Date().timeIntervalSince(start))
                     let chunk = (count > 1 ? "--- page \(i + 1) ---\n" : "") + result.text
                     await MainActor.run { text += (text.isEmpty ? "" : "\n\n") + chunk }
                 }
