@@ -8,7 +8,6 @@ Copyright (c) 2023-present: This work is licensed under the Creative Commons Att
 """
 
 import os
-import math
 import time
 import random
 import argparse
@@ -26,7 +25,6 @@ from test import validation
 from utils import Averager, Logger
 from dataset import hierarchical_dataset, AlignCollate
 from utils import CTCLabelConverter, AttnLabelConverter
-from modules.svtrv2 import load_openocr
 
 def set_train_mode(model, opt):
     """model.train(), except for the parts fine-tuning keeps fixed."""
@@ -86,10 +84,8 @@ def train(opt, device):
           opt.hidden_size, opt.num_class, opt.batch_max_length, opt.FeatureExtraction,
           opt.SequenceModeling, opt.Prediction)
 
-    # weight initialization (SVTRv2 initialises itself, as in OpenOCR)
+    # weight initialization
     for name, param in model.named_parameters():
-        if opt.FeatureExtraction == 'SVTRv2':
-            break
         if 'localization_fc2' in name:
             logger.log(f'Skip {name} as it is already initialized')
             continue
@@ -116,16 +112,6 @@ def train(opt, device):
             model.load_state_dict(state_dict, strict=False)
         else:
             model.load_state_dict(state_dict)
-    elif opt.svtr_pretrained:
-        load_openocr(model, opt.svtr_pretrained, logger.log)
-    if opt.FeatureExtraction == 'SVTRv2':
-        # CTC needs at least one output frame per label character (two between repeated ones)
-        with torch.no_grad():
-            frames = model.eval()(torch.zeros(1, opt.input_channel, opt.imgH, opt.imgW, device=device)).size(1)
-        logger.log(f'SVTRv2: {frames} CTC frames for a {opt.imgH}x{opt.imgW} input')
-        if frames < opt.batch_max_length:
-            raise SystemExit(f'SVTRv2 gives {frames} CTC frames at --imgW {opt.imgW}, fewer than --batch_max_length '
-                             f'{opt.batch_max_length}: raise --svtr_upsample or --imgW')
     if opt.freeze_FE:
         # train only the BiLSTMs and the output layer; BatchNorm statistics stay as pretrained
         for p in model.FeatureExtraction.parameters():
@@ -154,13 +140,7 @@ def train(opt, device):
     # [print(name, p.numel()) for name, p in filter(lambda p: p[1].requires_grad, model.named_parameters())]
 
     # setup optimizer
-    if opt.adamw:
-        # no weight decay on norms, biases and the RCTC query token (1-D tensors), as in OpenOCR
-        trainable = [p for p in model.parameters() if p.requires_grad]
-        optimizer = optim.AdamW([{'params': [p for p in trainable if p.ndim > 1], 'weight_decay': opt.weight_decay},
-                                 {'params': [p for p in trainable if p.ndim <= 1], 'weight_decay': 0.0}],
-                                lr=opt.lr, betas=(opt.beta1, 0.999))
-    elif opt.adam:
+    if opt.adam:
         optimizer = optim.Adam(filtered_parameters, lr=opt.lr, betas=(opt.beta1, 0.999))
     else:
         optimizer = optim.Adadelta(filtered_parameters, lr=opt.lr, rho=opt.rho, eps=opt.eps)
@@ -168,19 +148,6 @@ def train(opt, device):
     
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)
     reduce_lr = [50,100] # epochs where you want to reduce the LR by 10
-    step_scheduler = None
-    if opt.cosine:
-        # linear warm-up for --warmup_epochs, then cosine decay to 0, stepped after every optimizer step
-        steps_per_epoch = math.ceil(len(train_loader) / opt.accum_steps)
-        total, warmup = opt.num_epochs * steps_per_epoch, int(opt.warmup_epochs * steps_per_epoch)
-        step_scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda s: (s + 1) / warmup if s < warmup else
-                                                     0.5 * (1 + math.cos(math.pi * (s - warmup) / max(1, total - warmup))))
-        reduce_lr = []
-
-    # --amp: bfloat16 where the GPU supports it, else float16 with loss scaling
-    amp_dtype = torch.bfloat16 if device.type == 'cuda' and torch.cuda.is_bf16_supported() else torch.float16
-    use_amp = opt.amp and device.type == 'cuda'
-    scaler = torch.amp.GradScaler('cuda', enabled=use_amp and amp_dtype == torch.float16)
     
     # Slowly decrease the learning rate from initial lr to 0 over the course of training
     # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=opt.num_epochs, eta_min=0.01)
@@ -233,10 +200,9 @@ def train(opt, device):
             batch_size = image.size(0)
 
             if 'CTC' in opt.Prediction:
-                with torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
-                    preds = model(image)
+                preds = model(image)
                 preds_size = torch.IntTensor([preds.size(1)] * batch_size)
-                preds = preds.float().log_softmax(2).permute(1, 0, 2)
+                preds = preds.log_softmax(2).permute(1, 0, 2)
                 cost = criterion(preds, text, preds_size, length)
 
             else:
@@ -245,15 +211,11 @@ def train(opt, device):
                 cost = criterion(preds.view(-1, preds.shape[-1]).contiguous(), target.contiguous().view(-1))
 
             # --accum_steps N: gradients of N batches are summed before each optimizer step
-            scaler.scale(cost / opt.accum_steps).backward()
+            (cost / opt.accum_steps).backward()
             if (i + 1) % opt.accum_steps == 0 or i + 1 == len(train_loader):
-                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 model.zero_grad()
-                if step_scheduler:
-                    step_scheduler.step()
 
             loss_avg.add(cost)
         
@@ -311,12 +273,6 @@ if __name__ == '__main__':
     parser.add_argument('--rho', type=float, default=0.95, help='decay rate rho for Adadelta. default=0.95')
     parser.add_argument('--eps', type=float, default=1e-8, help='eps for Adadelta. default=1e-8')
     parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping value. default=5')
-    parser.add_argument('--adamw', action='store_true', help='use AdamW with --weight_decay (recommended for SVTRv2)')
-    parser.add_argument('--weight_decay', type=float, default=0.05, help='AdamW weight decay. default=0.05')
-    parser.add_argument('--cosine', action='store_true',
-                        help='linear warm-up for --warmup_epochs, then cosine decay to 0 (replaces the 10x drops at epochs 50 and 100)')
-    parser.add_argument('--warmup_epochs', type=float, default=1, help='warm-up length for --cosine. default=1')
-    parser.add_argument('--amp', action='store_true', help='mixed precision on the GPU (bfloat16 if supported, else float16)')
     """ Data processing """
     parser.add_argument('--select_data', type=str, default='/',
                         help='select training data (default is MJ-ST, which means MJ and ST used as training data)')
@@ -336,7 +292,7 @@ if __name__ == '__main__':
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
     """ Model Architecture """
     parser.add_argument('--FeatureExtraction', type=str, default="HRNet", #required=True,
-                        help='FeatureExtraction stage VGG|RCNN|ResNet|UNet|HRNet|Densenet|InceptionUnet|ResUnet|AttnUNet|UNet|VGG|SVTRv2')
+                        help='FeatureExtraction stage VGG|RCNN|ResNet|UNet|HRNet|Densenet|InceptionUnet|ResUnet|AttnUNet|UNet|VGG')
     parser.add_argument('--SequenceModeling', type=str, default="DBiLSTM", #required=True,
                         help='SequenceModeling stage LSTM|GRU|MDLSTM|BiLSTM|DBiLSTM')
     parser.add_argument('--Prediction', type=str, default="CTC", #required=True,
@@ -346,10 +302,6 @@ if __name__ == '__main__':
     parser.add_argument('--output_channel', type=int, default=512,
                         help='the number of output channel of Feature extractor')
     parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
-    parser.add_argument('--svtr_size', default='base', choices=['tiny', 'small', 'base'], help='SVTRv2 model size')
-    parser.add_argument('--svtr_upsample', type=int, default=2,
-                        help='SVTRv2 CTC frames per feature column (the encoder keeps 1/4 of the width)')
-    parser.add_argument('--svtr_pretrained', default='', help='OpenOCR SVTRv2 checkpoint to start from (optional)')
     """ GPU Selection """
     parser.add_argument('--device_id', type=str, default=None, help='cuda device ID')
     

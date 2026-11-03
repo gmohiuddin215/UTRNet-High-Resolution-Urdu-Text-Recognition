@@ -11,7 +11,6 @@ from modules.feature_extraction import HRNet_FeatureExtractor
 from modules.sequence_modeling import BidirectionalLSTM
 from modules.dropout_layer import dropout_layer
 from modules.prediction import Attention
-from modules.svtrv2 import SVTRv2, RCTCHead
 import torch.nn as nn
 
 # Other CNN Architectures
@@ -32,15 +31,6 @@ class Model(nn.Module):
         self.stages = {'Feat': opt.FeatureExtraction,
                        'Seq': opt.SequenceModeling,
                        'Pred': opt.Prediction}
-
-        if opt.FeatureExtraction == 'SVTRv2':
-            # SVTRv2 encoder + RCTC head + linear CTC classifier; --SequenceModeling is not used
-            if opt.Prediction != 'CTC':
-                raise Exception('SVTRv2 supports --Prediction CTC only')
-            self.FeatureExtraction = SVTRv2(opt.input_channel, getattr(opt, 'svtr_size', 'base'), opt.imgH)
-            self.SequenceModeling = RCTCHead(self.FeatureExtraction.out_channels, getattr(opt, 'svtr_upsample', 2))
-            self.Prediction = nn.Linear(self.FeatureExtraction.out_channels, opt.num_class)
-            return
 
         """ FeatureExtraction """
         if opt.FeatureExtraction == 'HRNet':
@@ -103,9 +93,6 @@ class Model(nn.Module):
             raise Exception('Prediction is neither CTC or Attn')
 
     def forward(self, input, text=None, is_train=True):
-        if self.stages['Feat'] == 'SVTRv2':
-            return self.Prediction(self.SequenceModeling(self.FeatureExtraction(input)))
-
         """ Feature extraction stage """
         visual_feature = self.FeatureExtraction(input)
         # print(visual_feature.shape) # [32, 32, 32, 400] #HRNet, [32, 512, 32, 400] #UNet
