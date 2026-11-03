@@ -120,6 +120,8 @@ def main():
     ap.add_argument("--SequenceModeling", default="DBiLSTM")
     ap.add_argument("--hidden_size", type=int, default=256)
     ap.add_argument("--output_channel", type=int, default=512)
+    ap.add_argument("--svtr_size", default="base", choices=["tiny", "small", "base"], help="SVTRv2 size (as trained)")
+    ap.add_argument("--svtr_upsample", type=int, default=2, help="SVTRv2 CTC frames per column (as trained)")
     ap.add_argument("--batch_max_length", type=int, default=250)
     ap.add_argument("--worst", type=int, default=15, help="how many worst lines to print")
     ap.add_argument("--out", help="write image/reference/prediction/CER for every line to this TSV")

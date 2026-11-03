@@ -84,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
     """ Model Architecture """
     parser.add_argument('--FeatureExtraction', type=str, default="HRNet", #required=True,
-                        help='FeatureExtraction stage VGG|RCNN|ResNet|UNet|HRNet|Densenet|InceptionUnet|ResUnet|AttnUNet|UNet|VGG')
+                        help='FeatureExtraction stage VGG|RCNN|ResNet|UNet|HRNet|Densenet|InceptionUnet|ResUnet|AttnUNet|UNet|VGG|SVTRv2')
     parser.add_argument('--SequenceModeling', type=str, default="DBiLSTM", #required=True,
                         help='SequenceModeling stage LSTM|GRU|MDLSTM|BiLSTM|DBiLSTM')
     parser.add_argument('--Prediction', type=str, default="CTC", #required=True,
@@ -93,6 +93,8 @@ if __name__ == '__main__':
     parser.add_argument('--input_channel', type=int, default=1, help='the number of input channel of Feature extractor')
     parser.add_argument('--output_channel', type=int, default=512, help='the number of output channel of Feature extractor')
     parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
+    parser.add_argument('--svtr_size', default='base', choices=['tiny', 'small', 'base'], help='SVTRv2 model size (as trained)')
+    parser.add_argument('--svtr_upsample', type=int, default=2, help='SVTRv2 CTC frames per feature column (as trained)')
     """ GPU Selection """
     parser.add_argument('--device_id', type=str, default=None, help='cuda device ID')
     

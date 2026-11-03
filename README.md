@@ -18,6 +18,10 @@ The Poster:
 See [FINETUNE_ARABIC.md](FINETUNE_ARABIC.md): extended glyph list, checkpoint expansion, synthetic
 line generation, cutting corrected pages into training lines, and per-script evaluation.
 
+## SVTRv2 on the same data
+See [SVTRV2.md](SVTRV2.md): `--FeatureExtraction SVTRv2`, a transformer recognizer trained and
+scored with the same data and scripts, to compare against the fine-tuned UTRNet.
+
 ## Using This Repository
 ### Environment
 * Python 3.7
